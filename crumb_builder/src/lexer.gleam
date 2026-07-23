@@ -4,6 +4,8 @@ import gleam/int
 import gleam/list
 import gleam/result
 import gleam/string
+
+import types as ty
 import util
 
 /// A spot in a buffer. Row, column format.
@@ -11,17 +13,22 @@ pub type Coord =
   #(Int, Int)
 
 pub type Delimiter {
+  // math
   AddDelim
   MinusDelim
   MulDelim
   DivDelim
   PowDelim
   ModDelim
+
+  // bit math
   BitAndDelim
   BitOrDelim
   BitNotDelim
   BitShrDelim
   BitShlDelim
+
+  // logic
   EqualDelim
   UnequalDelim
   GreaterDelim
@@ -30,57 +37,30 @@ pub type Delimiter {
   LessEqualDelim
   AndDelim
   OrDelim
+
+  // blocking
+  ParenthesisOpenDelim
+  CurlyBraceOpenDelim
+  BracketOpenDelim
+  ParenthesisCloseDelim
+  CurlyBraceCloseDelim
+  BracketCloseDelim
+
+  // control
   CommaDelim
+  PeriodDelim
+
+  // impossible state
   ImpossibleDelim
-}
-
-/// `Keyword` represents reserved language names
-pub type Keyword
-
-/// `Block` is an organizational token used to describe subsections of source code
-pub type Block {
-  /// Organizational token for a `()` block
-  Parentheses(List(Token))
-  /// Organizational token for a `[]` block
-  Brackets(List(Token))
-  /// Organizational token for a `{}` block
-  CurlyBrackets(List(Token))
-}
-
-/// `Primitive` contains the value of a primitive type
-pub type Primitive {
-  /// Contains the value of a primitive integer
-  Pint(Int)
-  /// Contains the value of a primitive floating-point
-  Pfloat(Float)
-  /// Contains the value of a primitive string
-  Pstr(String)
-  /// Contains the value of a primitive boolean
-  Pbool(Bool)
-}
-
-/// `Type` allows data to be tagged with a primitive or custom type
-pub type Type {
-  /// Primitive integer type tag (represents an `Int`)
-  Tint
-  /// Primitive floating-point type tag (represents a `Float`)
-  Tfloat
-  /// Primitive string type tag (represents a `String`)
-  Tstr
-  /// Primitive boolean type tag (represents a `Bool`)
-  Tbool
-  Custom(name: String, params: List(#(String, Type)))
 }
 
 /// `Token` is a generic used to describe parsed sections of sourcecode
 pub type Token {
   DelimiterToken(Delimiter)
-  KeywordToken(Keyword)
-  BlockToken(Block)
-  LiteralToken(Primitive)
-  TypeToken(Type)
+  KeywordToken(ty.Keyword)
+  LiteralToken(ty.Primitive)
+  TypeToken(ty.Type)
   DebugToken(String)
-  EOL
 }
 
 pub type Span {
@@ -191,6 +171,13 @@ pub fn delimiter_to_string(delimiter: Delimiter) -> String {
     LessEqualDelim -> "<="
     AndDelim -> "&&"
     OrDelim -> "||"
+    ParenthesisOpenDelim -> "("
+    CurlyBraceOpenDelim -> "{"
+    BracketOpenDelim -> "["
+    ParenthesisCloseDelim -> ")"
+    CurlyBraceCloseDelim -> "}"
+    BracketCloseDelim -> "]"
+    PeriodDelim -> "."
     CommaDelim -> ","
     ImpossibleDelim -> ""
   }
@@ -217,6 +204,14 @@ pub fn make_delimiter_lookup() -> List(#(String, Delimiter)) {
     LessEqualDelim,
     AndDelim,
     OrDelim,
+    ParenthesisOpenDelim,
+    CurlyBraceOpenDelim,
+    BracketOpenDelim,
+    ParenthesisCloseDelim,
+    CurlyBraceCloseDelim,
+    BracketCloseDelim,
+    CommaDelim,
+    PeriodDelim,
     CommaDelim,
   ]
   list.map2(delims, list.map(delims, delimiter_to_string), fn(d, ds) {
@@ -224,54 +219,44 @@ pub fn make_delimiter_lookup() -> List(#(String, Delimiter)) {
   })
 }
 
-pub fn block_to_string(block: Block, join: String) -> String {
-  case block {
-    Parentheses(tokens) -> "( " <> tokens_to_string(tokens, join) <> " )"
-    Brackets(tokens) -> "[ " <> tokens_to_string(tokens, join) <> " ]"
-    CurlyBrackets(tokens) -> "{ " <> tokens_to_string(tokens, join) <> " }"
-  }
-}
-
-pub fn keyword_to_string(keyword: Keyword) -> String {
+pub fn keyword_to_string(keyword: ty.Keyword) -> String {
   case keyword {
     _ -> "kw_other"
   }
 }
 
-pub fn primitive_to_string(primitive: Primitive) -> String {
+pub fn primitive_to_string(primitive: ty.Primitive) -> String {
   case primitive {
-    Pint(i) -> "lit_int<" <> int.to_string(i) <> ">"
-    Pfloat(f) -> "lit_float<" <> float.to_string(f) <> ">"
-    Pstr(s) -> "lit_str<" <> s <> ">"
-    Pbool(b) -> "lit_b<" <> bool.to_string(b) <> ">"
+    ty.Pint(i) -> "lit_int<" <> int.to_string(i) <> ">"
+    ty.Pfloat(f) -> "lit_float<" <> float.to_string(f) <> ">"
+    ty.Pstr(s) -> "lit_str<" <> s <> ">"
+    ty.Pbool(b) -> "lit_b<" <> bool.to_string(b) <> ">"
   }
 }
 
-pub fn type_to_string(type_: Type) -> String {
+pub fn type_to_string(type_: ty.Type) -> String {
   case type_ {
-    Tint -> "prim_int"
-    Tfloat -> "prim_float"
-    Tstr -> "prim_str"
-    Tbool -> "prim_bool"
-    Custom(name:, params: _) -> "custom_t<" <> name <> ">"
+    ty.Tint -> "prim_int"
+    ty.Tfloat -> "prim_float"
+    ty.Tstr -> "prim_str"
+    ty.Tbool -> "prim_bool"
+    ty.Custom(name:, params: _) -> "custom_t<" <> name <> ">"
   }
 }
 
-pub fn token_to_string(token: Token, join: String) -> String {
+pub fn token_to_string(token: Token) -> String {
   case token {
     DelimiterToken(delimiter) -> delimiter_to_string(delimiter)
-    BlockToken(block) -> block_to_string(block, join)
     KeywordToken(keyword) -> keyword_to_string(keyword)
     LiteralToken(primitive) -> primitive_to_string(primitive)
     TypeToken(type_) -> type_to_string(type_)
     DebugToken(text) -> text
-    EOL -> "EOL"
   }
 }
 
 pub fn tokens_to_string(tokens: List(Token), join: String) -> String {
   tokens
-  |> list.map(token_to_string(_, join))
+  |> list.map(token_to_string)
   |> string.join(join)
 }
 
