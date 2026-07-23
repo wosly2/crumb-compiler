@@ -1,41 +1,24 @@
 /// `Keyword` represents reserved language names
 pub type Keyword
 
-pub type BlockType {
+pub type Block {
   Parentheses
   Brackets
   CurlyBraces
 }
 
-/// `Primitive` contains the value of a primitive type
-pub type Primitive {
-  /// Contains the value of a primitive integer
-  Pint(Int)
-
-  /// Contains the value of a primitive floating-point
-  Pfloat(Float)
-
-  /// Contains the value of a primitive string
-  Pstr(String)
-
-  /// Contains the value of a primitive boolean
-  Pbool(Bool)
+pub type Type {
+  IntType
+  FloatType
+  StringType
+  BooleanType
+  ListType(Type)
 }
 
-/// `Type` allows data to be tagged with a primitive or custom type
-pub type Type {
-  /// Primitive integer type tag (represents an `Int`)
-  Tint
-
-  /// Primitive floating-point type tag (represents a `Float`)
-  Tfloat
-
-  /// Primitive string type tag (represents a `String`)
-  Tstr
-
-  /// Primitive boolean type tag (represents a `Bool`)
-  Tbool
-
-  /// Custom-defined type
-  Custom(name: String, params: List(#(String, Type)))
+pub type Value {
+  IntValue(Int)
+  FloatValue(Float)
+  StringValue(String)
+  BooleanValue(Bool)
+  ListValue(Type, List(Value))
 }

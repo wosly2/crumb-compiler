@@ -58,7 +58,7 @@ pub type Delimiter {
 pub type Token {
   DelimiterToken(Delimiter)
   KeywordToken(ty.Keyword)
-  LiteralToken(ty.Primitive)
+  LiteralToken(ty.Value)
   TypeToken(ty.Type)
   DebugToken(String)
 }
@@ -85,6 +85,7 @@ pub type IndicatedModeChange {
   ChangeStringLiteral
   ChangeEndOfLine
   ChangeWhiteSpace
+  ChangeComment
   ChangeNormal
 }
 
@@ -225,22 +226,23 @@ pub fn keyword_to_string(keyword: ty.Keyword) -> String {
   }
 }
 
-pub fn primitive_to_string(primitive: ty.Primitive) -> String {
+pub fn literal_to_string(primitive: ty.Value) -> String {
   case primitive {
-    ty.Pint(i) -> "lit_int<" <> int.to_string(i) <> ">"
-    ty.Pfloat(f) -> "lit_float<" <> float.to_string(f) <> ">"
-    ty.Pstr(s) -> "lit_str<" <> s <> ">"
-    ty.Pbool(b) -> "lit_b<" <> bool.to_string(b) <> ">"
+    ty.IntValue(i) -> "lit_int<" <> int.to_string(i) <> ">"
+    ty.FloatValue(f) -> "lit_float<" <> float.to_string(f) <> ">"
+    ty.StringValue(s) -> "lit_str<" <> s <> ">"
+    ty.BooleanValue(b) -> "lit_b<" <> bool.to_string(b) <> ">"
+    ty.ListValue(_, _) -> "this text does not appear"
   }
 }
 
 pub fn type_to_string(type_: ty.Type) -> String {
   case type_ {
-    ty.Tint -> "prim_int"
-    ty.Tfloat -> "prim_float"
-    ty.Tstr -> "prim_str"
-    ty.Tbool -> "prim_bool"
-    ty.Custom(name:, params: _) -> "custom_t<" <> name <> ">"
+    ty.IntType -> "prim_int"
+    ty.FloatType -> "prim_float"
+    ty.StringType -> "prim_str"
+    ty.BooleanType -> "prim_bool"
+    ty.ListType(_) -> "this text does not appear"
   }
 }
 
@@ -248,9 +250,9 @@ pub fn token_to_string(token: Token) -> String {
   case token {
     DelimiterToken(delimiter) -> delimiter_to_string(delimiter)
     KeywordToken(keyword) -> keyword_to_string(keyword)
-    LiteralToken(primitive) -> primitive_to_string(primitive)
+    LiteralToken(primitive) -> literal_to_string(primitive)
     TypeToken(type_) -> type_to_string(type_)
-    DebugToken(text) -> text
+    DebugToken(text) -> "dbg<" <> text <> ">"
   }
 }
 
@@ -275,6 +277,7 @@ pub fn read_indicated_mode_change(
     Error(_), "\"" -> ChangeStringLiteral
     Error(_), "\n" -> ChangeEndOfLine
     Error(_), " " -> ChangeWhiteSpace
+    Error(_), "#" -> ChangeComment
     Error(_), _ -> ChangeNormal
   }
 }
@@ -286,31 +289,40 @@ fn split_until_mode_change(
 ) -> #(List(String), List(String)) {
   list.split_while(text, fn(grapheme: String) -> Bool {
     case mode, read_indicated_mode_change(grapheme, delimiter_lookup) {
+      // stop on all but normal
       Normal, ChangeNewDelimiter -> False
       Normal, ChangeStringLiteral -> False
       Normal, ChangeNormal -> True
       Normal, ChangeEndOfLine -> False
       Normal, ChangeWhiteSpace -> False
+      Normal, ChangeComment -> False
 
+      // n/a
       InDelimiter, _ -> False
 
+      // stop only on string
       InStringLiteral, ChangeNewDelimiter -> True
       InStringLiteral, ChangeStringLiteral -> False
       InStringLiteral, ChangeNormal -> True
       InStringLiteral, ChangeEndOfLine -> True
       InStringLiteral, ChangeWhiteSpace -> True
+      InStringLiteral, ChangeComment -> True
 
+      // stop only on EOL
       InComment, ChangeNewDelimiter -> True
       InComment, ChangeStringLiteral -> True
       InComment, ChangeNormal -> True
       InComment, ChangeEndOfLine -> False
       InComment, ChangeWhiteSpace -> True
+      InComment, ChangeComment -> True
 
+      // stop on all but EOL/whitespace
       WhiteSpaceConsume, ChangeNewDelimiter -> False
       WhiteSpaceConsume, ChangeStringLiteral -> False
       WhiteSpaceConsume, ChangeNormal -> False
       WhiteSpaceConsume, ChangeEndOfLine -> True
       WhiteSpaceConsume, ChangeWhiteSpace -> True
+      WhiteSpaceConsume, ChangeComment -> False
 
       Finished, _ -> False
     }
@@ -320,15 +332,13 @@ fn split_until_mode_change(
 fn determine_next_mode(rest: List(String), lexer: Lexer) -> #(Coord, Mode) {
   let mode = case list.first(rest) {
     Ok(grapheme) ->
-      case
-        lexer.mode.1,
-        read_indicated_mode_change(grapheme, lexer.delimiter_lookup)
-      {
-        _, ChangeNewDelimiter -> #(lexer.current_coord, InDelimiter)
-        _, ChangeStringLiteral -> #(lexer.current_coord, InStringLiteral)
-        _, ChangeEndOfLine -> #(lexer.current_coord, WhiteSpaceConsume)
-        _, ChangeWhiteSpace -> #(lexer.current_coord, WhiteSpaceConsume)
-        _, ChangeNormal -> #(lexer.current_coord, Normal)
+      case read_indicated_mode_change(grapheme, lexer.delimiter_lookup) {
+        ChangeNewDelimiter -> #(lexer.current_coord, InDelimiter)
+        ChangeStringLiteral -> #(lexer.current_coord, InStringLiteral)
+        ChangeEndOfLine -> #(lexer.current_coord, WhiteSpaceConsume)
+        ChangeWhiteSpace -> #(lexer.current_coord, WhiteSpaceConsume)
+        ChangeNormal -> #(lexer.current_coord, Normal)
+        ChangeComment -> #(lexer.current_coord, InComment)
       }
     Error(_) -> #(lexer.current_coord, Finished)
   }
@@ -339,15 +349,19 @@ pub fn run_mode_normal(
   text: List(String),
   lexer: Lexer,
 ) -> #(List(String), Lexer) {
+  // get graphemes until mode change
   let #(taken, rest) =
     split_until_mode_change(text, Normal, lexer.delimiter_lookup)
 
+  // advance, push
   let lexer =
     lexer
     |> advance_over(taken)
     |> push_token(DebugToken(string.join(taken, "")))
 
+  // apply next mode
   let lexer = Lexer(..lexer, mode: determine_next_mode(rest, lexer))
+
   #(rest, lexer)
 }
 
@@ -362,25 +376,59 @@ pub fn run_mode_in_string_literal(
   text: List(String),
   lexer: Lexer,
 ) -> #(List(String), Lexer) {
-  #(text, lexer)
+  // remove the first string literal to prevent endless loop
+  let text = list.drop(text, 1)
+
+  // get graphemes until mode change
+  let #(taken, rest) =
+    split_until_mode_change(text, InStringLiteral, lexer.delimiter_lookup)
+
+  // remove the second string literal to prevent going into string again
+  let rest = list.drop(rest, 1)
+
+  // advance, push
+  let lexer =
+    lexer
+    |> advance_over(taken)
+    |> push_token(LiteralToken(ty.StringValue(string.join(taken, ""))))
+
+  // apply next mode
+  let lexer = Lexer(..lexer, mode: determine_next_mode(rest, lexer))
+
+  #(rest, lexer)
 }
 
 pub fn run_mode_in_comment(
   text: List(String),
   lexer: Lexer,
 ) -> #(List(String), Lexer) {
-  #(text, lexer)
+  // get graphemes until mode change
+  let #(taken, rest) =
+    split_until_mode_change(text, InComment, lexer.delimiter_lookup)
+
+  // advance, do not push
+  let lexer = lexer |> advance_over(taken)
+
+  // apply next mode
+  let lexer = Lexer(..lexer, mode: determine_next_mode(rest, lexer))
+
+  #(rest, lexer)
 }
 
 pub fn run_mode_white_space_consume(
   text: List(String),
   lexer: Lexer,
 ) -> #(List(String), Lexer) {
+  // get graphemes until mode change
   let #(taken, rest) =
     split_until_mode_change(text, WhiteSpaceConsume, lexer.delimiter_lookup)
 
+  // advance, do not push
   let lexer = lexer |> advance_over(taken)
+
+  // apply next mode
   let lexer = Lexer(..lexer, mode: determine_next_mode(rest, lexer))
+
   #(rest, lexer)
 }
 
