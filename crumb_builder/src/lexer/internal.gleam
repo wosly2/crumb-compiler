@@ -2,12 +2,13 @@ import gleam/bool
 import gleam/float
 import gleam/int
 import gleam/list
+import gleam/option
 import gleam/result
 import gleam/string
 
 import lexer/types.{
-  type Coord, type Delimiter, type IndicatedModeChange, type Lexer,
-  type LexerError, type Mode, type Token,
+  type Coord, type Delimiter, type Lexer, type LexerError, type Mode,
+  type TextReaderChange as Change, type Token,
 } as l
 import types as ty
 import util as ut
@@ -75,7 +76,11 @@ pub fn delimiter_to_string(delimiter: Delimiter) -> String {
     l.CommentDelim(l.CommentLineDelim) -> "//"
     l.CommentDelim(l.CommentOpenDelim) -> "/*"
     l.CommentDelim(l.CommentCloseDelim) -> "*/"
-    l.ImpossibleDelim -> ""
+    l.ColonDelim -> ":"
+    l.StringLiteralDelim -> "\""
+    l.WhiteSpaceDelim -> " "
+    l.NewLineDelim -> "\n"
+    l.ImpossibleDelim -> "UhOh!"
   }
 }
 
@@ -112,6 +117,10 @@ pub fn make_delimiter_lookup() -> List(#(String, Delimiter)) {
     l.CommentDelim(l.CommentLineDelim),
     l.CommentDelim(l.CommentOpenDelim),
     l.CommentDelim(l.CommentCloseDelim),
+    l.ColonDelim,
+    l.StringLiteralDelim,
+    l.WhiteSpaceDelim,
+    l.NewLineDelim,
     // don't forget to put other delims here, but NOT ImpossibleDelim
   ]
   list.map2(delims, list.map(delims, delimiter_to_string), fn(d, ds) {
@@ -119,28 +128,32 @@ pub fn make_delimiter_lookup() -> List(#(String, Delimiter)) {
   })
 }
 
+pub fn delimiter_length(delim: Delimiter) -> Int {
+  delim |> delimiter_to_string |> string.length
+}
+
 pub fn keyword_to_string(keyword: ty.Keyword) -> String {
   case keyword {
-    _ -> "kw_other"
+    _ -> "other"
   }
 }
 
 pub fn literal_to_string(primitive: ty.Value) -> String {
   case primitive {
-    ty.IntValue(i) -> "Lit_int<" <> int.to_string(i) <> ">"
-    ty.FloatValue(f) -> "Lit_float<" <> float.to_string(f) <> ">"
-    ty.StringValue(s) -> "Lit_str<" <> s <> ">"
-    ty.BooleanValue(b) -> "Lit_b<" <> bool.to_string(b) <> ">"
+    ty.IntValue(i) -> int.to_string(i)
+    ty.FloatValue(f) -> float.to_string(f)
+    ty.StringValue(s) -> s
+    ty.BooleanValue(b) -> bool.to_string(b)
     ty.ListValue(_, _) -> "this text does not appear"
   }
 }
 
 pub fn type_to_string(type_: ty.Type) -> String {
   case type_ {
-    ty.IntType -> "Prim_int"
-    ty.FloatType -> "Prim_float"
-    ty.StringType -> "Prim_str"
-    ty.BooleanType -> "Prim_bool"
+    ty.IntType -> "int"
+    ty.FloatType -> "float"
+    ty.StringType -> "str"
+    ty.BooleanType -> "bool"
     ty.ListType(_) -> "this text does not appear"
   }
 }
@@ -157,159 +170,176 @@ pub fn token_to_string(token: Token) -> String {
   case token {
     l.DelimiterToken(delimiter) -> delimiter_to_string(delimiter)
     l.KeywordToken(keyword) -> keyword_to_string(keyword)
-    l.LiteralToken(primitive) -> literal_to_string(primitive)
+    l.LiteralToken(literal) -> literal_to_string(literal)
     l.TypeToken(type_) -> type_to_string(type_)
-    l.ErrorToken(error) -> "Error" <> error_to_string(error)
-    l.DebugToken(text) -> "Dbg<" <> text <> ">"
+    l.ErrorToken(error) -> error_to_string(error)
+    l.DebugToken(text) -> text
   }
 }
 
-pub fn tokens_to_string(tokens: List(Token), join: String) -> String {
-  tokens
-  |> list.map(token_to_string)
-  |> string.join(join)
+pub fn token_to_string_debug(token: Token) -> String {
+  case token {
+    l.DelimiterToken(_) -> "Del"
+    l.KeywordToken(_) -> "Kyw"
+    l.LiteralToken(_) -> "Lit"
+    l.TypeToken(_) -> "Typ"
+    l.ErrorToken(_) -> "Err"
+    l.DebugToken(_) -> "Dbg"
+  }
+  <> "<"
+  <> token_to_string(token)
+  |> ut.visible_whitespace
+  <> ">"
 }
 
-pub fn read_indicated_mode_change(
+pub fn match_longest_delimiter(
   text: List(String),
   delimiter_lookup: List(#(String, Delimiter)),
-) -> IndicatedModeChange {
-  // check if there even is a first character
-  case list.first(text) {
-    Ok(grapheme) ->
-      // there is! match it over stuff we know
-      case grapheme {
-        // not a delim char. figure out what it is
-        v if v == l.string_literal_value -> l.ChangeStringLiteral
-        v if v == l.end_of_line_value -> l.ChangeEndOfLine
-        v if v == l.white_space_value -> l.ChangeWhiteSpace
-        // it didn't match any of that, check if it's a delim instead
-        _ ->
-          case
-            ut.any_start_with(
-              list.map(delimiter_lookup, fn(ds_d) { ds_d.0 }),
-              grapheme,
-            )
-          {
-            // yes!! figure out which and return it
-            Ok(_) ->
-              // build the whole delim string
-              list.take_while(text, fn(g) {
-                ut.any_start_with(
-                  list.map(delimiter_lookup, fn(ds_d) { ds_d.0 }),
-                  g,
-                )
-                |> result.is_ok
-              })
-              |> string.join("")
-              // get the proper delim from the lookup and return it
-              |> list.key_find(delimiter_lookup, _)
-              |> result.unwrap(l.ImpossibleDelim)
-              |> l.ChangeNewDelimiter
+) -> Result(Delimiter, Nil) {
+  let #(_, prefix) =
+    ut.accumulate_until(initial: #(text, option.None), update: fn(acc) {
+      let #(rest, prefix_builder) = acc
 
-            // isn't a delim :(
-            Error(_) -> l.ChangeNormal
+      // has first, is created?
+      case list.first(rest), prefix_builder {
+        Ok(grapheme), option.Some(prefix_string) -> {
+          // build
+          let new_prefix_string = string.append(prefix_string, grapheme)
+
+          // see if it matches now
+          case ut.any_start_with(ut.keys(delimiter_lookup), new_prefix_string) {
+            // it does now, keep going (also drop from rest to make sure the text progresses)
+            Ok(_) ->
+              list.Continue(#(
+                list.drop(rest, 1),
+                option.Some(new_prefix_string),
+              ))
+
+            Error(_) ->
+              // it does not now. if prefix_string has a length greater than 0,
+              // then we know that it had to match, and is therefore the longest match.
+              // otherwise, there is no match (as prefix_string_new is the first character)
+              case string.is_empty(prefix_string) {
+                // there is no match
+                True -> list.Stop(#(rest, option.None))
+                False -> list.Stop(#(rest, option.Some(prefix_string)))
+              }
           }
+        }
+        // there is a first but we need to build the delim
+        Ok(_), option.None -> {
+          list.Continue(#(rest, option.Some("")))
+        }
+        // all out :( return as is
+        Error(_), _ -> list.Stop(#(rest, prefix_builder))
       }
-    // there are no more characters!
-    Error(_) -> l.ChangeEndOfFile
+    })
+
+  // check if the prefix actually matches with any delim strings, then return delim
+  prefix
+  |> option.map(list.key_find(delimiter_lookup, _))
+  |> option.to_result(Nil)
+  |> result.flatten
+}
+
+pub fn read_changes(
+  text: List(String),
+  delimiter_lookup: List(#(String, Delimiter)),
+) -> Change {
+  case list.is_empty(text), match_longest_delimiter(text, delimiter_lookup) {
+    True, _ -> l.HitEndOfFile
+    False, Ok(delimiter) -> l.HitDelimiter(delimiter)
+    False, Error(_) -> l.HitGrapheme
   }
 }
 
-pub fn continue_on_change(mode: Mode, change: IndicatedModeChange) -> Bool {
+// determine whether to keep taking graphemes depending on the mode and change
+pub fn continue_on_change(mode: Mode, change: Change) -> Bool {
   case mode, change {
-    // stop on all but normal
-    l.Normal, l.ChangeNewDelimiter(_) -> False
-    l.Normal, l.ChangeStringLiteral -> False
-    l.Normal, l.ChangeNormal -> True
-    l.Normal, l.ChangeEndOfLine -> False
-    l.Normal, l.ChangeWhiteSpace -> False
+    // always stop on EOF
+    _, l.HitEndOfFile -> False
 
-    // n/a
-    l.InDelimiter, _ -> False
-
-    // stop only on string
-    l.InStringLiteral, l.ChangeNewDelimiter(_) -> True
-    l.InStringLiteral, l.ChangeStringLiteral -> False
-    l.InStringLiteral, l.ChangeNormal -> True
-    l.InStringLiteral, l.ChangeEndOfLine -> True
-    l.InStringLiteral, l.ChangeWhiteSpace -> True
-
-    // stop depending on comment type
-    l.InComment(l.CommentOpenDelim),
-      l.ChangeNewDelimiter(l.CommentDelim(l.CommentCloseDelim))
-    -> False
-    l.InComment(_), l.ChangeNewDelimiter(_) -> True
-    l.InComment(_), l.ChangeStringLiteral -> True
-    l.InComment(_), l.ChangeNormal -> True
-    l.InComment(l.CommentLineDelim), l.ChangeEndOfLine -> False
-    l.InComment(l.CommentOpenDelim), l.ChangeEndOfLine -> True
-    l.InComment(_), l.ChangeWhiteSpace -> True
-
-    // in this scenario we always want to stop to check if there is an error
-    l.InComment(l.CommentCloseDelim), _ -> False
-
-    // stop on all but EOL/whitespace
-    l.WhiteSpaceConsume, l.ChangeNewDelimiter(_) -> False
-    l.WhiteSpaceConsume, l.ChangeStringLiteral -> False
-    l.WhiteSpaceConsume, l.ChangeNormal -> False
-    l.WhiteSpaceConsume, l.ChangeEndOfLine -> True
-    l.WhiteSpaceConsume, l.ChangeWhiteSpace -> True
-
-    // n/a
+    // n/a?
     l.Finished, _ -> False
 
-    // ALWAYS stop mode when file ends
-    _, l.ChangeEndOfFile -> False
+    // -----------------------------------------------------------------------
+    // stop on all but normal
+    l.ConsumeNormal, l.HitGrapheme -> True
+    l.ConsumeNormal, _ -> False
+
+    // stop on all but hit delim
+    l.ConsumeDelimiter(_), l.HitDelimiter(_) -> True
+    l.ConsumeDelimiter(_), _ -> False
+
+    // stop on string lit
+    l.ConsumeString, l.HitDelimiter(l.StringLiteralDelim) -> False
+    l.ConsumeString, _ -> True
+
+    // stop on newline if line type
+    l.ConsumeComment(l.CommentLineDelim), l.HitDelimiter(l.NewLineDelim) ->
+      False
+    // stop on closing if block type
+    l.ConsumeComment(l.CommentOpenDelim),
+      l.HitDelimiter(l.CommentDelim(l.CommentCloseDelim))
+    -> False
+    // malformed, always stop here
+    l.ConsumeComment(l.CommentCloseDelim), _ -> False
+    // otherwise go
+    l.ConsumeComment(_), _ -> True
+
+    // stop on not whitespace/newline
+    l.ConsumeWhiteSpace, l.HitDelimiter(l.NewLineDelim) -> True
+    l.ConsumeWhiteSpace, l.HitDelimiter(l.WhiteSpaceDelim) -> True
+    l.ConsumeWhiteSpace, _ -> False
   }
 }
 
-pub fn split_until_mode_change(
+pub fn split_until_change(
   text: List(String),
   mode: Mode,
   delimiter_lookup: List(#(String, Delimiter)),
-) -> #(List(String), List(String), IndicatedModeChange) {
+) -> #(List(String), List(String), Change) {
   // emulating a split_while but with an accumulator so we
   // can have the parts accumulate inside the loop
   let #(left_reverse, right, change) =
-    ut.accumulate_until(#([], text, l.ChangeNormal), fn(acc) {
-      // we don't care what change the accumulator had
+    ut.accumulate_until(#([], text, l.HitEndOfFile), fn(acc) {
+      // we don't care what change the accumulator had (the EOF above is placeholder)
       let #(left_reverse, right, _) = acc
 
-      // pop from right to left, reversed
-      let left_reverse = [
-        list.first(right) |> result.unwrap(""),
-        ..left_reverse
-      ]
-      let right = list.drop(right, 1)
-
       // check what the change is rn
-      let change = read_indicated_mode_change(right, delimiter_lookup)
+      let change = read_changes(right, delimiter_lookup)
 
       // stop or go?
       case continue_on_change(mode, change) {
-        True -> list.Continue(#(left_reverse, right, change))
+        True -> {
+          // build left reversed from right
+          let left_reverse = [
+            list.first(right) |> result.unwrap(""),
+            ..left_reverse
+          ]
+          let right = list.drop(right, 1)
+
+          list.Continue(#(left_reverse, right, change))
+        }
         False -> list.Stop(#(left_reverse, right, change))
       }
     })
 
-  // we built the left side in reverse so now flip and return
+  // flip left side before return
   #(list.reverse(left_reverse), right, change)
 }
 
-pub fn determine_next_mode(
-  change: IndicatedModeChange,
-  lexer: Lexer,
-) -> #(Coord, Mode) {
+pub fn determine_next_mode(change: Change, lexer: Lexer) -> #(Coord, Mode) {
   let mode = case change {
-    l.ChangeNewDelimiter(l.CommentDelim(comment_delim)) ->
-      l.InComment(comment_delim)
-    l.ChangeNewDelimiter(_) -> l.InDelimiter
-    l.ChangeStringLiteral -> l.InStringLiteral
-    l.ChangeEndOfLine -> l.WhiteSpaceConsume
-    l.ChangeWhiteSpace -> l.WhiteSpaceConsume
-    l.ChangeNormal -> l.Normal
-    l.ChangeEndOfFile -> l.Finished
+    l.HitDelimiter(delim) ->
+      case delim {
+        l.CommentDelim(comment_delim) -> l.ConsumeComment(comment_delim)
+        l.StringLiteralDelim -> l.ConsumeString
+        l.WhiteSpaceDelim | l.NewLineDelim -> l.ConsumeWhiteSpace
+        _ -> l.ConsumeDelimiter(delim)
+      }
+    l.HitGrapheme -> l.ConsumeNormal
+    l.HitEndOfFile -> l.Finished
   }
 
   #(lexer.current_coord, mode)

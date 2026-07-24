@@ -1,16 +1,102 @@
+import gleam/int
 import gleam/list
+import gleam/option.{type Option}
+import gleam/string
 
 import lexer/internal as i
 import lexer/modes
-import lexer/types.{type Lexer, type SpannedToken, type Token} as l
+import lexer/types.{type Lexer, type Mode, type SpannedToken, type Token} as l
+import util as ut
 
 pub fn new_lexer() -> Lexer {
   l.Lexer(
     tokens: [],
-    mode: #(#(0, 0), l.Normal),
+    mode: #(#(0, 0), l.ConsumeNormal),
     current_coord: #(0, 0),
     delimiter_lookup: i.make_delimiter_lookup(),
+    iterations: 0,
+    max_iterations: option.None,
+    log: option.None,
   )
+}
+
+pub fn max_iterations(lexer: Lexer, max_iterations: Option(Int)) -> Lexer {
+  l.Lexer(..lexer, max_iterations:)
+}
+
+pub fn logging(lexer: Lexer, on: Bool) -> Lexer {
+  let log = case on {
+    True ->
+      case lexer.log {
+        option.Some(old_log) -> option.Some(old_log)
+        option.None -> option.Some([])
+      }
+    False -> option.None
+  }
+  l.Lexer(..lexer, log:)
+}
+
+/// `log` only creates or pushes messages if `Lexer.log` is not `None`.
+/// Logging will be skipped if `message()` evaluates to `""`. Instead,
+/// `""` is logged whenever `message()` evaluates to `"log_blank"`.
+pub fn log(lexer: Lexer, message: fn() -> String) -> Lexer {
+  case lexer.log {
+    option.Some(log) -> {
+      l.Lexer(
+        ..lexer,
+        log: option.Some(log_sure(log, message, lexer.iterations)),
+      )
+    }
+    option.None -> lexer
+  }
+}
+
+fn log_sure(
+  log: List(#(Int, String)),
+  message: fn() -> String,
+  iterations: Int,
+) -> List(#(Int, String)) {
+  let msg = message()
+  case msg {
+    "" -> log
+    "log_blank" -> [#(iterations, ""), ..log]
+    _ -> [#(iterations, msg), ..log]
+  }
+}
+
+/// Evaluate a series of logs with one check to ensure logging is allowed,
+/// rather than a check for every message.
+pub fn log_chain(lexer: Lexer, messages: List(fn() -> String)) -> Lexer {
+  case lexer.log {
+    option.Some(log) -> {
+      let log =
+        option.Some(
+          list.fold(messages, log, fn(log, message) {
+            log_sure(log, message, lexer.iterations)
+          }),
+        )
+      l.Lexer(..lexer, log:)
+    }
+    option.None -> lexer
+  }
+}
+
+/// `log_blank` triggers `log` to log a message of `""`. It returns
+/// exactly `"log_blank"`.
+pub fn log_blank() -> String {
+  "log_blank"
+}
+
+pub fn present_log(lexer: Lexer) -> Option(List(#(Int, String))) {
+  option.map(lexer.log, list.reverse)
+}
+
+pub fn log_to_string(log: Option(List(#(Int, String)))) -> Option(String) {
+  option.map(log, fn(log) {
+    log
+    |> list.map(fn(msg) { "[" <> int.to_string(msg.0) <> "] " <> msg.1 })
+    |> string.join("\n")
+  })
 }
 
 pub fn remove_spans(tokens: List(SpannedToken)) -> List(Token) {
@@ -24,17 +110,127 @@ pub fn present_tokens(lexer: Lexer) -> List(SpannedToken) {
   list.reverse(lexer.tokens)
 }
 
-pub fn run(text: List(String), lexer: l.Lexer) -> l.Lexer {
-  let #(text, lexer) = case lexer.mode.1 {
-    l.Normal -> modes.normal(text, lexer)
-    l.InDelimiter -> modes.in_delimiter(text, lexer)
-    l.InStringLiteral -> modes.in_string_literal(text, lexer)
-    l.InComment(comment_delim) -> modes.in_comment(text, lexer, comment_delim)
-    l.WhiteSpaceConsume -> modes.white_space_consume(text, lexer)
-    l.Finished -> modes.finished(text, lexer)
+fn mode_to_string(mode: Mode) -> String {
+  case mode {
+    l.ConsumeNormal -> "Normal"
+    l.ConsumeDelimiter(delim) ->
+      "In delimiter: " <> i.token_to_string_debug(l.DelimiterToken(delim))
+    l.ConsumeString -> "In string literal"
+    l.ConsumeComment(comment_delim) ->
+      "In comment: "
+      <> i.token_to_string_debug(
+        l.DelimiterToken(l.CommentDelim(comment_delim)),
+      )
+    l.ConsumeWhiteSpace -> "Consume white space"
+    l.Finished -> "Finished"
   }
-  case lexer.mode.1 {
-    l.Finished -> lexer
-    _ -> run(text, lexer)
+}
+
+fn change_to_string(change: l.TextReaderChange) -> String {
+  case change {
+    l.HitDelimiter(delim) ->
+      "Hit delimiter: " <> i.token_to_string_debug(l.DelimiterToken(delim))
+    l.HitGrapheme -> "Hit grapheme"
+    l.HitEndOfFile -> "Hit EOF"
+  }
+}
+
+pub fn coord_to_string(coord: l.Coord) -> String {
+  "(" <> int.to_string(coord.0) <> ", " <> int.to_string(coord.0) <> ")"
+}
+
+pub fn span_to_string(span: l.Span) -> String {
+  "<"
+  <> coord_to_string(span.start)
+  <> "->"
+  <> coord_to_string(span.stop)
+  <> ">"
+}
+
+pub fn run(lexer: Lexer, text: List(String)) -> Lexer {
+  // count
+  let lexer = l.Lexer(..lexer, iterations: lexer.iterations + 1)
+
+  let #(taken, rest, token) = case lexer.mode.1 {
+    l.ConsumeNormal -> modes.normal(text, lexer.delimiter_lookup)
+    l.ConsumeDelimiter(delim) ->
+      modes.in_delimiter(text, delim, lexer.delimiter_lookup)
+
+    l.ConsumeString -> modes.in_string_literal(text, lexer.delimiter_lookup)
+
+    l.ConsumeComment(comment_delim) ->
+      modes.in_comment(text, comment_delim, lexer.delimiter_lookup)
+
+    l.ConsumeWhiteSpace ->
+      modes.white_space_consume(text, lexer.delimiter_lookup)
+
+    l.Finished -> modes.finished(text)
+  }
+
+  // debug print
+  let lexer =
+    lexer
+    |> log_chain([
+      fn() { "ITERATION" },
+      fn() { "Mode now: " <> mode_to_string(lexer.mode.1) },
+      fn() {
+        "Taken: "
+        <> taken
+        |> string.join("")
+        |> ut.visible_whitespace
+        |> ut.cut_off_string_with_message(50)
+      },
+      fn() {
+        "Rest: "
+        <> rest
+        |> string.join("")
+        |> ut.visible_whitespace
+        |> ut.cut_off_string_with_message(50)
+      },
+      fn() {
+        "Token: "
+        <> i.token_to_string(option.unwrap(token, l.DebugToken("No Token")))
+      },
+    ])
+
+  // advance
+  let lexer = lexer |> i.advance_over(taken)
+
+  // push token
+  let lexer = case token {
+    option.Some(token) -> i.push_token(lexer, token)
+    option.None -> lexer
+  }
+
+  // update lexer mode based on the rest
+  let change = i.read_changes(rest, lexer.delimiter_lookup)
+  let mode = i.determine_next_mode(change, lexer)
+
+  let lexer =
+    lexer
+    |> log_chain([
+      fn() { "Change: " <> change_to_string(change) },
+      fn() { "New mode: " <> mode_to_string(mode.1) },
+    ])
+
+  // set mode
+  let lexer = l.Lexer(..lexer, mode:)
+
+  let lexer =
+    lexer
+    |> log(fn() {
+      case lexer.max_iterations {
+        option.Some(max) if lexer.iterations >= max ->
+          "Lexer iteration count too high, quitting!"
+        _ -> ""
+      }
+    })
+
+  let lexer = log(lexer, fn() { string.repeat("\n", 2) })
+
+  case lexer.max_iterations, lexer.mode.1 {
+    _, l.Finished -> lexer
+    option.Some(max), _ if lexer.iterations >= max -> lexer
+    _, _ -> run(lexer, rest)
   }
 }

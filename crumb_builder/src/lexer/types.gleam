@@ -1,10 +1,5 @@
+import gleam/option.{type Option}
 import types as ty
-
-pub const string_literal_value = "\""
-
-pub const end_of_line_value = "\n"
-
-pub const white_space_value = " "
 
 /// A spot in a buffer. Row, column format.
 pub type Coord =
@@ -47,9 +42,17 @@ pub type Delimiter {
   // control
   CommaDelim
   PeriodDelim
+  ColonDelim
 
   // comments
   CommentDelim(CommentDelimiter)
+
+  // string
+  StringLiteralDelim
+
+  // whitespace
+  WhiteSpaceDelim
+  NewLineDelim
 
   // impossible state
   ImpossibleDelim
@@ -86,21 +89,18 @@ pub type SpannedToken {
 }
 
 pub type Mode {
-  Normal
-  InDelimiter
-  InStringLiteral
-  InComment(CommentDelimiter)
-  WhiteSpaceConsume
+  ConsumeNormal
+  ConsumeDelimiter(Delimiter)
+  ConsumeString
+  ConsumeComment(CommentDelimiter)
+  ConsumeWhiteSpace
   Finished
 }
 
-pub type IndicatedModeChange {
-  ChangeNewDelimiter(Delimiter)
-  ChangeStringLiteral
-  ChangeEndOfLine
-  ChangeWhiteSpace
-  ChangeNormal
-  ChangeEndOfFile
+pub type TextReaderChange {
+  HitDelimiter(Delimiter)
+  HitGrapheme
+  HitEndOfFile
 }
 
 pub type Lexer {
@@ -111,5 +111,9 @@ pub type Lexer {
     mode: #(Coord, Mode),
     current_coord: Coord,
     delimiter_lookup: List(#(String, Delimiter)),
+    iterations: Int,
+    max_iterations: Option(Int),
+    // the log is also inverted for performance. tick, message
+    log: Option(List(#(Int, String))),
   )
 }

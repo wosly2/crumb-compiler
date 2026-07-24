@@ -1,141 +1,153 @@
-import gleam/io
 import gleam/list
+import gleam/option.{type Option}
+import gleam/result
 import gleam/string
 
-import lexer/types.{type Lexer} as l
+import lexer/types.{type Token} as l
 import types as ty
 
 import lexer/internal as i
 
-pub fn normal(text: List(String), lexer: Lexer) -> #(List(String), Lexer) {
+pub fn normal(
+  text: List(String),
+  delimiter_lookup: List(#(String, l.Delimiter)),
+) -> #(List(String), List(String), Option(l.Token)) {
   // get graphemes until mode change
-  let #(taken, rest, change) =
-    i.split_until_mode_change(text, l.Normal, lexer.delimiter_lookup)
+  let #(taken, rest, _) =
+    i.split_until_change(text, l.ConsumeNormal, delimiter_lookup)
 
-  // advance, push
-  let lexer =
-    lexer
-    |> i.advance_over(taken)
-    |> i.push_token(l.DebugToken(string.join(taken, "")))
-
-  // apply next mode
-  let lexer = l.Lexer(..lexer, mode: i.determine_next_mode(change, lexer))
-
-  #(rest, lexer)
+  #(taken, rest, option.Some(l.DebugToken(string.join(taken, ""))))
 }
 
 pub fn in_delimiter(
   text: List(String),
-  lexer: Lexer,
-) -> #(List(String), Lexer) {
-  #(text, lexer)
+  delimiter: l.Delimiter,
+  delimiter_lookup: List(#(String, l.Delimiter)),
+) -> #(List(String), List(String), Option(Token)) {
+  // consume the given delimiter
+  let delim_str = delimiter |> i.delimiter_to_string
+  let taken = delim_str |> string.split("")
+  let rest = text |> list.drop(list.length(taken))
+
+  // get the proper delim from the lookup and return it
+  let token =
+    delim_str
+    |> list.key_find(delimiter_lookup, _)
+    |> result.unwrap(l.ImpossibleDelim)
+    |> l.DelimiterToken
+
+  #(taken, rest, option.Some(token))
 }
 
 pub fn in_string_literal(
   text: List(String),
-  lexer: Lexer,
-) -> #(List(String), Lexer) {
+  delimiter_lookup: List(#(String, l.Delimiter)),
+) -> #(List(String), List(String), Option(l.Token)) {
   // remove the first string literal to prevent it getting added in
-  let text = list.drop(text, string.length(l.string_literal_value))
+  let text = list.drop(text, i.delimiter_length(l.StringLiteralDelim))
 
   // get graphemes until mode change
   let #(taken, rest, change) =
-    i.split_until_mode_change(text, l.InStringLiteral, lexer.delimiter_lookup)
+    i.split_until_change(text, l.ConsumeString, delimiter_lookup)
 
-  io.println("String mode - taken:  " <> string.join(taken, ""))
-  io.println("String mode - rest:   " <> string.join(rest, ""))
-  io.println("String mode - change: " <> string.inspect(change))
+  // put the delim back into taken to not mess up the span
+  let taken =
+    i.delimiter_to_string(l.StringLiteralDelim)
+    |> string.split("")
+    |> list.append(taken)
 
   // react to stopping circumstances
-  let #(rest, token, change) = case change {
-    // if we stopped because of a comment closing string, consume and update change
-    l.ChangeStringLiteral -> {
-      let rest = list.drop(rest, string.length(l.string_literal_value))
-      #(
-        rest,
-        l.LiteralToken(ty.StringValue(string.join(taken, ""))),
-        i.read_indicated_mode_change(rest, lexer.delimiter_lookup),
-      )
+  let #(taken, rest, token) = case change {
+    // if we stopped because of a comment closing string, consume that closing delimiter
+    l.HitDelimiter(l.StringLiteralDelim) -> {
+      let rest = list.drop(rest, i.delimiter_length(l.StringLiteralDelim))
+
+      // put the delim back into taken to not mess up the span
+      let taken =
+        i.delimiter_to_string(l.StringLiteralDelim)
+        |> string.split("")
+        |> list.append(taken, _)
+
+      #(taken, rest, l.LiteralToken(ty.StringValue(string.join(taken, ""))))
     }
 
     // if we stopped because of EOF, push an error token
-    l.ChangeEndOfFile -> #(rest, l.ErrorToken(l.UnclosedStringLiteral), change)
+    l.HitEndOfFile -> #(taken, rest, l.ErrorToken(l.UnclosedStringLiteral))
 
     // impossible state
-    _ -> #(rest, l.DebugToken("Impossible"), change)
+    _ -> #(taken, rest, l.DebugToken("Impossible"))
   }
 
-  // advance, push
-  let lexer = lexer |> i.advance_over(taken) |> i.push_token(token)
-
-  // apply next mode
-  let lexer = l.Lexer(..lexer, mode: i.determine_next_mode(change, lexer))
-
-  #(rest, lexer)
+  #(taken, rest, option.Some(token))
 }
 
 pub fn in_comment(
   text: List(String),
-  lexer: Lexer,
   comment_delim: l.CommentDelimiter,
-) -> #(List(String), Lexer) {
+  delimiter_lookup: List(#(String, l.Delimiter)),
+) -> #(List(String), List(String), Option(l.Token)) {
   // get graphemes until mode change
   let #(taken, rest, change) =
-    i.split_until_mode_change(
+    i.split_until_change(
       text,
-      l.InComment(comment_delim),
-      lexer.delimiter_lookup,
+      l.ConsumeComment(comment_delim),
+      delimiter_lookup,
     )
-
-  // advance, do not push
-  let lexer = lexer |> i.advance_over(taken)
 
   // react to stopping circumstances
-  let #(rest, lexer, change) = case change {
-    // if we stopped because of a comment closing delim, consume that delim and find next change instead
-    l.ChangeNewDelimiter(l.CommentDelim(l.CommentCloseDelim)) -> {
-      let rest =
-        list.drop(
-          rest,
-          string.length(
-            i.delimiter_to_string(l.CommentDelim(l.CommentCloseDelim)),
-          ),
-        )
-      #(rest, lexer, i.read_indicated_mode_change(rest, lexer.delimiter_lookup))
-    }
-    // if we stopped because of EOF, push an error token
-    l.ChangeEndOfFile -> #(
+  let #(taken, rest, token) = case comment_delim, change {
+    // always push an error token on a comment close
+    l.CommentCloseDelim, _ -> #(
+      taken,
       rest,
-      i.push_token(lexer, l.ErrorToken(l.UnclosedBlockComment)),
-      change,
+      option.Some(l.ErrorToken(l.UnexpectedCommentClose)),
     )
-    // impossible state
-    _ -> #(rest, lexer, change)
+
+    // if we stopped because of a comment closing delim, consume that delim
+    _, l.HitDelimiter(l.CommentDelim(l.CommentCloseDelim)) -> {
+      // put the delim back into taken to not mess up the span
+      let taken =
+        i.delimiter_to_string(l.CommentDelim(l.CommentCloseDelim))
+        |> string.split("")
+        |> list.append(taken, _)
+
+      #(
+        taken,
+        list.drop(rest, i.delimiter_length(l.CommentDelim(l.CommentCloseDelim))),
+        option.None,
+      )
+    }
+
+    // if we stopped because of EOF during block comment, push an error token
+    l.CommentOpenDelim, l.HitEndOfFile -> #(
+      taken,
+      rest,
+      option.Some(l.ErrorToken(l.UnclosedBlockComment)),
+    )
+
+    // no error in this case
+    l.CommentLineDelim, l.HitEndOfFile -> #(taken, rest, option.None)
+
+    // impossible states
+    _, _ -> #(taken, rest, option.None)
   }
 
-  // apply next mode
-  let lexer = l.Lexer(..lexer, mode: i.determine_next_mode(change, lexer))
-
-  #(rest, lexer)
+  #(taken, rest, token)
 }
 
 pub fn white_space_consume(
   text: List(String),
-  lexer: Lexer,
-) -> #(List(String), Lexer) {
+  delimiter_lookup: List(#(String, l.Delimiter)),
+) -> #(List(String), List(String), Option(l.Token)) {
   // get graphemes until mode change
-  let #(taken, rest, change) =
-    i.split_until_mode_change(text, l.WhiteSpaceConsume, lexer.delimiter_lookup)
+  let #(taken, rest, _) =
+    i.split_until_change(text, l.ConsumeWhiteSpace, delimiter_lookup)
 
-  // advance, do not push
-  let lexer = lexer |> i.advance_over(taken)
-
-  // apply next mode
-  let lexer = l.Lexer(..lexer, mode: i.determine_next_mode(change, lexer))
-
-  #(rest, lexer)
+  #(taken, rest, option.None)
 }
 
-pub fn finished(text: List(String), lexer: Lexer) -> #(List(String), Lexer) {
-  #(text, lexer)
+pub fn finished(
+  text: List(String),
+) -> #(List(String), List(String), Option(l.Token)) {
+  #([], text, option.None)
 }

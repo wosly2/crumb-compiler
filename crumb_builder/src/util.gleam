@@ -1,3 +1,4 @@
+import gleam/int
 import gleam/list
 import gleam/string
 
@@ -64,5 +65,32 @@ pub fn try_accumulate_until(
     Ok(list.Continue(next)) -> try_accumulate_until(next, update)
     Ok(list.Stop(final)) -> Ok(final)
     Error(error) -> Error(error)
+  }
+}
+
+pub fn keys(pairs: List(#(a, b))) -> List(a) {
+  list.map(pairs, fn(pair) { pair.0 })
+}
+
+pub fn values(pairs: List(#(a, b))) -> List(b) {
+  list.map(pairs, fn(pair) { pair.1 })
+}
+
+pub fn visible_whitespace(text: String) -> String {
+  text |> string.replace(" ", "·") |> string.replace("\n", "↵")
+}
+
+pub fn visible_whitespace_still_shows_newline(text: String) -> String {
+  text |> string.replace("\n", "↵") |> string.replace("↵", "↵\n")
+}
+
+pub fn cut_off_string_with_message(text: String, after n: Int) -> String {
+  case string.length(text) > n {
+    True ->
+      text |> string.to_graphemes |> list.take(n) |> string.join("")
+      <> " ..."
+      <> int.to_string(string.length(text) - n)
+      <> " more"
+    False -> text
   }
 }
