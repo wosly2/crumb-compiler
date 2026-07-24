@@ -1,3 +1,4 @@
 crumb_vm/target/
 crumb_builder/build/
 crumb_builder/erl_crash.dump
+crumb_builder/src/temp

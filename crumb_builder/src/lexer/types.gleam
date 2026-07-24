@@ -1,0 +1,115 @@
+import types as ty
+
+pub const string_literal_value = "\""
+
+pub const end_of_line_value = "\n"
+
+pub const white_space_value = " "
+
+/// A spot in a buffer. Row, column format.
+pub type Coord =
+  #(Int, Int)
+
+pub type Delimiter {
+  // math
+  AddDelim
+  MinusDelim
+  MulDelim
+  DivDelim
+  PowDelim
+  ModDelim
+
+  // bit math
+  BitAndDelim
+  BitOrDelim
+  BitNotDelim
+  BitShrDelim
+  BitShlDelim
+
+  // logic
+  EqualDelim
+  UnequalDelim
+  GreaterDelim
+  LessDelim
+  GreaterEqualDelim
+  LessEqualDelim
+  AndDelim
+  OrDelim
+
+  // blocking
+  ParenthesisOpenDelim
+  CurlyBraceOpenDelim
+  BracketOpenDelim
+  ParenthesisCloseDelim
+  CurlyBraceCloseDelim
+  BracketCloseDelim
+
+  // control
+  CommaDelim
+  PeriodDelim
+
+  // comments
+  CommentDelim(CommentDelimiter)
+
+  // impossible state
+  ImpossibleDelim
+}
+
+pub type CommentDelimiter {
+  CommentLineDelim
+  CommentOpenDelim
+  CommentCloseDelim
+}
+
+/// `Token` is a generic used to describe parsed sections of sourcecode
+pub type Token {
+  DelimiterToken(Delimiter)
+  KeywordToken(ty.Keyword)
+  LiteralToken(ty.Value)
+  TypeToken(ty.Type)
+  ErrorToken(LexerError)
+  DebugToken(String)
+}
+
+pub type LexerError {
+  UnexpectedCommentClose
+  UnclosedBlockComment
+  UnclosedStringLiteral
+}
+
+pub type Span {
+  Span(start: Coord, stop: Coord)
+}
+
+pub type SpannedToken {
+  SpannedToken(Token, Span)
+}
+
+pub type Mode {
+  Normal
+  InDelimiter
+  InStringLiteral
+  InComment(CommentDelimiter)
+  WhiteSpaceConsume
+  Finished
+}
+
+pub type IndicatedModeChange {
+  ChangeNewDelimiter(Delimiter)
+  ChangeStringLiteral
+  ChangeEndOfLine
+  ChangeWhiteSpace
+  ChangeNormal
+  ChangeEndOfFile
+}
+
+pub type Lexer {
+  Lexer(
+    /// The token accumulator.
+    /// Note the accumulator is inverted for performance and must be reversed when read out
+    tokens: List(SpannedToken),
+    mode: #(Coord, Mode),
+    current_coord: Coord,
+    delimiter_lookup: List(#(String, Delimiter)),
+  )
+}

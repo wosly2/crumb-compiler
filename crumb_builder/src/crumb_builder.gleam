@@ -1,13 +1,14 @@
 import gleam/io
 import gleam/string
 import lexer
+import lexer/internal as lexi
 
 pub fn main() -> Nil {
   let t =
-    "hello there what is your name # comment
-  hi again this is a new line # another comment      blah
-         blahhhhh # hi hi # #hi ### hi hi
-      \"hello\" hi"
+    "\"string literal //comment
+    \"
+    readable // cant read me
+    readable /*"
 
   { "TEXT:\n\n" <> t }
   |> io.println
@@ -17,7 +18,7 @@ pub fn main() -> Nil {
   |> lexer.run(lexer.new_lexer())
   |> lexer.present_tokens
   |> lexer.remove_spans
-  |> lexer.tokens_to_string(", ")
+  |> lexi.tokens_to_string(", ")
   |> fn(t) { "\n\nTOKENIZED:\n\n" <> t }
   |> io.println
 }

@@ -45,3 +45,24 @@ pub fn any_start_with(
     }
   })
 }
+
+pub fn accumulate_until(
+  initial initial: a,
+  update update: fn(a) -> list.ContinueOrStop(a),
+) -> a {
+  case update(initial) {
+    list.Continue(acc) -> accumulate_until(acc, update)
+    list.Stop(acc) -> acc
+  }
+}
+
+pub fn try_accumulate_until(
+  initial initial: a,
+  update update: fn(a) -> Result(list.ContinueOrStop(a), b),
+) -> Result(a, b) {
+  case update(initial) {
+    Ok(list.Continue(next)) -> try_accumulate_until(next, update)
+    Ok(list.Stop(final)) -> Ok(final)
+    Error(error) -> Error(error)
+  }
+}
