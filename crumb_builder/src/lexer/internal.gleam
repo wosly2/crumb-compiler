@@ -5,6 +5,7 @@ import gleam/list
 import gleam/option
 import gleam/result
 import gleam/string
+import gleam_community/ansi
 
 import lexer/types.{
   type Coord, type Delimiter, type Lexer, type LexerError, type Mode,
@@ -80,7 +81,8 @@ pub fn delimiter_to_string(delimiter: Delimiter) -> String {
     l.StringLiteralDelim -> "\""
     l.WhiteSpaceDelim -> " "
     l.NewLineDelim -> "\n"
-    l.ImpossibleDelim -> "UhOh!"
+    l.EqualsDelim -> "="
+    l.ReturnsDelim -> "->"
   }
 }
 
@@ -121,7 +123,9 @@ pub fn make_delimiter_lookup() -> List(#(String, Delimiter)) {
     l.StringLiteralDelim,
     l.WhiteSpaceDelim,
     l.NewLineDelim,
-    // don't forget to put other delims here, but NOT ImpossibleDelim
+    l.EqualsDelim,
+    l.ReturnsDelim,
+    // don't forget to put other delims here
   ]
   list.map2(delims, list.map(delims, delimiter_to_string), fn(d, ds) {
     #(ds, d)
@@ -134,8 +138,20 @@ pub fn delimiter_length(delim: Delimiter) -> Int {
 
 pub fn keyword_to_string(keyword: ty.Keyword) -> String {
   case keyword {
-    _ -> "other"
+    ty.KeywordVariableDeclaration -> "let"
+    ty.KeywordFunctionDeclaration -> "func"
   }
+}
+
+pub fn make_keyword_lookup() -> List(#(String, ty.Keyword)) {
+  let keywords = [
+    ty.KeywordFunctionDeclaration,
+    ty.KeywordVariableDeclaration,
+    // don't forget to put other keywords here!!
+  ]
+  list.map2(keywords, list.map(keywords, keyword_to_string), fn(d, ds) {
+    #(ds, d)
+  })
 }
 
 pub fn literal_to_string(primitive: ty.Value) -> String {
@@ -171,9 +187,9 @@ pub fn token_to_string(token: Token) -> String {
     l.DelimiterToken(delimiter) -> delimiter_to_string(delimiter)
     l.KeywordToken(keyword) -> keyword_to_string(keyword)
     l.LiteralToken(literal) -> literal_to_string(literal)
-    l.TypeToken(type_) -> type_to_string(type_)
     l.ErrorToken(error) -> error_to_string(error)
     l.DebugToken(text) -> text
+    l.SymbolToken(text) -> text
   }
 }
 
@@ -182,14 +198,15 @@ pub fn token_to_string_debug(token: Token) -> String {
     l.DelimiterToken(_) -> "Del"
     l.KeywordToken(_) -> "Kyw"
     l.LiteralToken(_) -> "Lit"
-    l.TypeToken(_) -> "Typ"
     l.ErrorToken(_) -> "Err"
     l.DebugToken(_) -> "Dbg"
+    l.SymbolToken(_) -> "Sym"
   }
-  <> "<"
+  <> "❲"
   <> token_to_string(token)
+  |> ansi.green
   |> ut.visible_whitespace
-  <> ">"
+  <> "❳"
 }
 
 pub fn match_longest_delimiter(

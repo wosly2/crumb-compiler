@@ -3,6 +3,8 @@ import gleam/list
 import gleam/option.{type Option}
 import gleam/string
 
+import gleam_community/ansi
+
 import lexer/internal as i
 import lexer/modes
 import lexer/types.{type Lexer, type Mode, type SpannedToken, type Token} as l
@@ -14,6 +16,7 @@ pub fn new_lexer() -> Lexer {
     mode: #(#(0, 0), l.ConsumeNormal),
     current_coord: #(0, 0),
     delimiter_lookup: i.make_delimiter_lookup(),
+    keyword_lookup: i.make_keyword_lookup(),
     iterations: 0,
     max_iterations: option.None,
     log: option.None,
@@ -94,7 +97,9 @@ pub fn present_log(lexer: Lexer) -> Option(List(#(Int, String))) {
 pub fn log_to_string(log: Option(List(#(Int, String)))) -> Option(String) {
   option.map(log, fn(log) {
     log
-    |> list.map(fn(msg) { "[" <> int.to_string(msg.0) <> "] " <> msg.1 })
+    |> list.map(fn(msg) {
+      "[" <> int.to_string(msg.0) |> ansi.bright_green <> "] " <> msg.1
+    })
     |> string.join("\n")
   })
 }
@@ -151,45 +156,43 @@ pub fn run(lexer: Lexer, text: List(String)) -> Lexer {
   // count
   let lexer = l.Lexer(..lexer, iterations: lexer.iterations + 1)
 
-  let #(taken, rest, token) = case lexer.mode.1 {
-    l.ConsumeNormal -> modes.normal(text, lexer.delimiter_lookup)
-    l.ConsumeDelimiter(delim) ->
-      modes.in_delimiter(text, delim, lexer.delimiter_lookup)
-
-    l.ConsumeString -> modes.in_string_literal(text, lexer.delimiter_lookup)
-
-    l.ConsumeComment(comment_delim) ->
-      modes.in_comment(text, comment_delim, lexer.delimiter_lookup)
-
-    l.ConsumeWhiteSpace ->
-      modes.white_space_consume(text, lexer.delimiter_lookup)
-
-    l.Finished -> modes.finished(text)
-  }
+  // get and run the mode
+  let l.ModeOutput(taken, rest, token) =
+    modes.get_function(lexer.mode.1)(l.ModeInput(
+      text:,
+      delimiter_lookup: lexer.delimiter_lookup,
+      keyword_lookup: lexer.keyword_lookup,
+    ))
 
   // debug print
   let lexer =
     lexer
     |> log_chain([
-      fn() { "ITERATION" },
-      fn() { "Mode now: " <> mode_to_string(lexer.mode.1) },
+      fn() { "ITERATION" |> ansi.bg_bright_blue },
       fn() {
-        "Taken: "
+        "Mode now: " |> ansi.bright_blue
+        <> mode_to_string(lexer.mode.1) |> ansi.bright_yellow
+      },
+      fn() {
+        "Taken: " |> ansi.bright_blue
         <> taken
         |> string.join("")
         |> ut.visible_whitespace
+        |> ansi.green
         |> ut.cut_off_string_with_message(50)
       },
       fn() {
-        "Rest: "
+        "Rest: " |> ansi.bright_blue
         <> rest
         |> string.join("")
         |> ut.visible_whitespace
+        |> ansi.green
         |> ut.cut_off_string_with_message(50)
       },
       fn() {
-        "Token: "
+        "Token: " |> ansi.bright_blue
         <> i.token_to_string(option.unwrap(token, l.DebugToken("No Token")))
+        |> ansi.bright_yellow
       },
     ])
 
@@ -209,8 +212,14 @@ pub fn run(lexer: Lexer, text: List(String)) -> Lexer {
   let lexer =
     lexer
     |> log_chain([
-      fn() { "Change: " <> change_to_string(change) },
-      fn() { "New mode: " <> mode_to_string(mode.1) },
+      fn() {
+        "Change: " |> ansi.bright_blue
+        <> change_to_string(change) |> ansi.bright_yellow
+      },
+      fn() {
+        "New mode: " |> ansi.bright_blue
+        <> mode_to_string(mode.1) |> ansi.bright_yellow
+      },
     ])
 
   // set mode

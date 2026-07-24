@@ -1,5 +1,8 @@
 /// `Keyword` represents reserved language names
-pub type Keyword
+pub type Keyword {
+  KeywordVariableDeclaration
+  KeywordFunctionDeclaration
+}
 
 pub type Block {
   Parentheses
@@ -20,5 +23,5 @@ pub type Value {
   FloatValue(Float)
   StringValue(String)
   BooleanValue(Bool)
-  ListValue(Type, List(Value))
+  ListValue(expected: Type, values: List(Value))
 }

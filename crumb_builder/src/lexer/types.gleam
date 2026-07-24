@@ -44,6 +44,10 @@ pub type Delimiter {
   PeriodDelim
   ColonDelim
 
+  // assignment
+  EqualsDelim
+  ReturnsDelim
+
   // comments
   CommentDelim(CommentDelimiter)
 
@@ -53,9 +57,6 @@ pub type Delimiter {
   // whitespace
   WhiteSpaceDelim
   NewLineDelim
-
-  // impossible state
-  ImpossibleDelim
 }
 
 pub type CommentDelimiter {
@@ -69,7 +70,7 @@ pub type Token {
   DelimiterToken(Delimiter)
   KeywordToken(ty.Keyword)
   LiteralToken(ty.Value)
-  TypeToken(ty.Type)
+  SymbolToken(String)
   ErrorToken(LexerError)
   DebugToken(String)
 }
@@ -97,6 +98,21 @@ pub type Mode {
   Finished
 }
 
+pub type ModeOutput {
+  ModeOutput(taken: List(String), rest: List(String), token: Option(Token))
+}
+
+pub type ModeInput {
+  ModeInput(
+    text: List(String),
+    delimiter_lookup: List(#(String, Delimiter)),
+    keyword_lookup: List(#(String, ty.Keyword)),
+  )
+}
+
+pub type ModeFunction =
+  fn(ModeInput) -> ModeOutput
+
 pub type TextReaderChange {
   HitDelimiter(Delimiter)
   HitGrapheme
@@ -111,6 +127,7 @@ pub type Lexer {
     mode: #(Coord, Mode),
     current_coord: Coord,
     delimiter_lookup: List(#(String, Delimiter)),
+    keyword_lookup: List(#(String, ty.Keyword)),
     iterations: Int,
     max_iterations: Option(Int),
     // the log is also inverted for performance. tick, message

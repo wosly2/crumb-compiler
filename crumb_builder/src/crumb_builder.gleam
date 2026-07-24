@@ -2,6 +2,7 @@ import gleam/io
 import gleam/list
 import gleam/option
 import gleam/string
+import gleam_community/ansi
 import util
 
 import lexer
@@ -9,38 +10,18 @@ import lexer/internal as lexi
 
 pub fn main() -> Nil {
   let t =
-    // "f \"string literal //comment
-    // \"
-    // readable // cant, read me me.me/* hi*/ bye
-    // hello hello \"     hi\" whoop /* stuff stuff
-    // . . \"kabloo\" blee bloh */ text shoop
-    // readable /*"
-    //   "
-    // *
-    // **
-    // ***
-    // /
-    // //
-    // /*
-    // */
-    // <
-    // <=
-    // <<
-    // >
-    // >=
-    // >>
-    // &
-    // &&
-    // |
-    // ||
-    // !
-    // !=
-    // "
-    "***=
-  >>=
-  <<=
-  !==
-  //**/"
+    "
+
+  let x = 5 / 3
+  print(x)
+  func print(s: String) -> {
+    // hi
+    Nil
+  }
+  paper.cut(\"hello // \")
+
+  \"
+  "
 
   let lex =
     lexer.new_lexer()
@@ -55,12 +36,13 @@ pub fn main() -> Nil {
 
   {
     "TEXT:\n\n"
-    <> t
+    <> t |> ansi.bright_green
     <> "\n\nTEXT (whitespace made visible):\n\n"
     <> {
       t
       |> util.visible_whitespace
       |> util.visible_whitespace_still_shows_newline
+      |> ansi.bright_green
     }
   }
   |> io.println

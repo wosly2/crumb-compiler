@@ -1,54 +1,92 @@
+import gleam/float
+import gleam/int
 import gleam/list
-import gleam/option.{type Option}
+import gleam/option
 import gleam/result
 import gleam/string
+import util as ut
 
-import lexer/types.{type Token} as l
+import lexer/types.{
+  type CommentDelimiter, type Delimiter, type Mode, type ModeFunction,
+  type ModeInput, type ModeOutput, type Token,
+} as l
 import types as ty
 
 import lexer/internal as i
 
-pub fn normal(
-  text: List(String),
-  delimiter_lookup: List(#(String, l.Delimiter)),
-) -> #(List(String), List(String), Option(l.Token)) {
-  // get graphemes until mode change
-  let #(taken, rest, _) =
-    i.split_until_change(text, l.ConsumeNormal, delimiter_lookup)
-
-  #(taken, rest, option.Some(l.DebugToken(string.join(taken, ""))))
+pub fn get_function(mode: Mode) -> ModeFunction {
+  case mode {
+    l.ConsumeNormal -> normal
+    l.ConsumeDelimiter(d) -> consume_delimiter(_, d)
+    l.ConsumeString -> consume_string
+    l.ConsumeComment(cd) -> consume_comment(_, cd)
+    l.ConsumeWhiteSpace -> consume_white_space
+    l.Finished -> finished
+  }
 }
 
-pub fn in_delimiter(
-  text: List(String),
-  delimiter: l.Delimiter,
-  delimiter_lookup: List(#(String, l.Delimiter)),
-) -> #(List(String), List(String), Option(Token)) {
+fn token_parse_normal_graphemes(
+  text: String,
+  keyword_lookup: List(#(String, ty.Keyword)),
+) -> Result(Token, Nil) {
+  // integer?
+  int.parse(text)
+  |> result.map(ty.IntValue)
+  |> result.or(
+    // float?
+    float.parse(text)
+    |> result.map(ty.FloatValue),
+  )
+  |> result.map(l.LiteralToken)
+  |> result.or(
+    // keyword?
+    list.key_find(keyword_lookup, text)
+    |> result.map(l.KeywordToken),
+  )
+  |> result.or(
+    l.SymbolToken(text)
+    |> ut.result_if(!string.is_empty(text), _, Nil),
+  )
+}
+
+fn normal(mi: ModeInput) -> ModeOutput {
+  // get graphemes until mode change
+  let #(taken, rest, _) =
+    i.split_until_change(mi.text, l.ConsumeNormal, mi.delimiter_lookup)
+
+  let token =
+    taken
+    |> string.join("")
+    |> token_parse_normal_graphemes(mi.keyword_lookup)
+    |> option.from_result
+
+  l.ModeOutput(taken, rest, token)
+}
+
+fn consume_delimiter(mi: ModeInput, delimiter: Delimiter) -> ModeOutput {
   // consume the given delimiter
   let delim_str = delimiter |> i.delimiter_to_string
   let taken = delim_str |> string.split("")
-  let rest = text |> list.drop(list.length(taken))
+  let rest = mi.text |> list.drop(list.length(taken))
 
   // get the proper delim from the lookup and return it
   let token =
     delim_str
-    |> list.key_find(delimiter_lookup, _)
-    |> result.unwrap(l.ImpossibleDelim)
-    |> l.DelimiterToken
+    |> list.key_find(mi.delimiter_lookup, _)
+    |> result.map(l.DelimiterToken)
+    |> result.unwrap(l.DebugToken("Impossible"))
+    |> option.Some
 
-  #(taken, rest, option.Some(token))
+  l.ModeOutput(taken, rest, token)
 }
 
-pub fn in_string_literal(
-  text: List(String),
-  delimiter_lookup: List(#(String, l.Delimiter)),
-) -> #(List(String), List(String), Option(l.Token)) {
+fn consume_string(mi: ModeInput) -> ModeOutput {
   // remove the first string literal to prevent it getting added in
-  let text = list.drop(text, i.delimiter_length(l.StringLiteralDelim))
+  let text = list.drop(mi.text, i.delimiter_length(l.StringLiteralDelim))
 
   // get graphemes until mode change
   let #(taken, rest, change) =
-    i.split_until_change(text, l.ConsumeString, delimiter_lookup)
+    i.split_until_change(text, l.ConsumeString, mi.delimiter_lookup)
 
   // put the delim back into taken to not mess up the span
   let taken =
@@ -78,20 +116,19 @@ pub fn in_string_literal(
     _ -> #(taken, rest, l.DebugToken("Impossible"))
   }
 
-  #(taken, rest, option.Some(token))
+  l.ModeOutput(taken, rest, token |> option.Some)
 }
 
-pub fn in_comment(
-  text: List(String),
-  comment_delim: l.CommentDelimiter,
-  delimiter_lookup: List(#(String, l.Delimiter)),
-) -> #(List(String), List(String), Option(l.Token)) {
+fn consume_comment(
+  mi: ModeInput,
+  comment_delim: CommentDelimiter,
+) -> ModeOutput {
   // get graphemes until mode change
   let #(taken, rest, change) =
     i.split_until_change(
-      text,
+      mi.text,
       l.ConsumeComment(comment_delim),
-      delimiter_lookup,
+      mi.delimiter_lookup,
     )
 
   // react to stopping circumstances
@@ -132,22 +169,17 @@ pub fn in_comment(
     _, _ -> #(taken, rest, option.None)
   }
 
-  #(taken, rest, token)
+  l.ModeOutput(taken, rest, token)
 }
 
-pub fn white_space_consume(
-  text: List(String),
-  delimiter_lookup: List(#(String, l.Delimiter)),
-) -> #(List(String), List(String), Option(l.Token)) {
+fn consume_white_space(mi: ModeInput) -> ModeOutput {
   // get graphemes until mode change
   let #(taken, rest, _) =
-    i.split_until_change(text, l.ConsumeWhiteSpace, delimiter_lookup)
+    i.split_until_change(mi.text, l.ConsumeWhiteSpace, mi.delimiter_lookup)
 
-  #(taken, rest, option.None)
+  l.ModeOutput(taken, rest, option.None)
 }
 
-pub fn finished(
-  text: List(String),
-) -> #(List(String), List(String), Option(l.Token)) {
-  #([], text, option.None)
+fn finished(mi: ModeInput) -> ModeOutput {
+  l.ModeOutput([], mi.text, option.None)
 }
