@@ -1,5 +1,6 @@
 left:
 
+- write tests
 - add more docs
 - finish lexer
   - allow normal lexer to build keywords, literals, and symbols as tokens
